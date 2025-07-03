@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 use crate::core::{events::LogEvent, states::AppState};
 use crate::data::{ItemAssets, schema::ItemList};
+use crate::equipment::components::Equipment;
+use crate::inventory::components::Backpack;
 
 static CLI_BUFFER: Lazy<Arc<Mutex<VecDeque<String>>>> =
     Lazy::new(|| Arc::new(Mutex::new(VecDeque::new())));
@@ -83,6 +85,8 @@ fn execute_cli_commands(
     state: Res<State<AppState>>,
     item_assets: Res<ItemAssets>,
     lists: Res<Assets<ItemList>>,
+    backpack: Res<Backpack>,
+    equipment: Res<Equipment>,
     mut ev_give: EventWriter<crate::inventory::events::GiveItemEvent>,
     mut ev_list: EventWriter<crate::inventory::events::ListInventoryEvent>,
     mut ev_equip: EventWriter<crate::equipment::events::EquipEvent>,
@@ -114,6 +118,31 @@ fn execute_cli_commands(
                     state.get(),
                     cnt
                 )));
+
+                log.write(LogEvent("--- Equipment ---".into()));
+                if let Some(weapon) = &equipment.weapon {
+                    log.write(LogEvent(format!(
+                        "Weapon: {} (id={})",
+                        weapon.proto.name, weapon.proto.id
+                    )));
+                } else {
+                    log.write(LogEvent("Weapon: (empty)".into()));
+                }
+
+                log.write(LogEvent("--- Backpack ---".into()));
+                let mut empty = true;
+                for (i, stack) in backpack.slots.iter().enumerate() {
+                    if stack.count > 0 {
+                        empty = false;
+                        log.write(LogEvent(format!(
+                            "[{}] {} ×{} (id={})",
+                            i, stack.proto.name, stack.count, stack.proto.id
+                        )));
+                    }
+                }
+                if empty {
+                    log.write(LogEvent("  (empty)".into()));
+                }
             }
 
             Command::Exit => {

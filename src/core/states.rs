@@ -7,5 +7,5 @@ pub enum AppState {
     Startup,
     Loading,
     InGame,
-    Shutdown,
+    _Shutdown,
 }
