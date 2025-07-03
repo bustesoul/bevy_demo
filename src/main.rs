@@ -7,8 +7,11 @@ mod interface;
 mod inventory;
 
 use crate::core::states;
-use core::CorePlugin;
-use interface::debug_cli::DebugCliPlugin;
+use crate::core::CorePlugin;
+use crate::data::DataPlugin;
+use crate::equipment::EquipmentPlugin;
+use crate::interface::debug_cli::DebugCliPlugin;
+use crate::inventory::InventoryPlugin;
 
 fn main() {
     App::new()
@@ -19,11 +22,15 @@ fn main() {
             }), // visible窗口，实现“无 UI”
             ..default()
         }))
+        // 核心插件
         .add_plugins(CorePlugin)
+        // 功能插件
+        .add_plugins(DataPlugin)
+        .add_plugins(InventoryPlugin)
+        .add_plugins(EquipmentPlugin)
+        // 交互插件
         .add_plugins(DebugCliPlugin)
-        .add_plugins(data::DataPlugin)
-        .add_plugins(inventory::InventoryPlugin)
-        .add_plugins(equipment::EquipmentPlugin)
+        // 全局系统
         .add_systems(Update, forward_log_event) // 简单打印
         .add_systems(Startup, |mut next: ResMut<NextState<states::AppState>>| {
             next.set(states::AppState::Loading);

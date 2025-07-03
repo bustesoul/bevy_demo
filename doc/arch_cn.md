@@ -12,6 +12,8 @@
 
 -   `core`: 核心插件，负责定义和管理全局状态、事件和资源。
 -   `data`: 数据管理模块，负责从外部文件（如 RON）加载游戏数据（如物品、怪物等）。
+-   `inventory`: 背包模块，管理玩家物品。
+-   `equipment`: 装备模块，管理角色装备。
 -   `interface`: 用户交互模块，目前实现了一个简单的调试命令行界面 (CLI)。
 -   `main.rs`: 应用入口，负责组装所有插件和系统，启动 Bevy 应用。
 
@@ -25,7 +27,7 @@
 
 1.  `main.rs` 中的 `main` 函数启动 Bevy `App`。
 2.  加载 `DefaultPlugins`，但禁用了主窗口的显示 (`visible: false`)，实现“无头”运行模式。
-3.  加载自定义的 `CorePlugin`, `DataPlugin`, `DebugCliPlugin`，初始化应用的核心功能。
+3.  加载自定义的 `CorePlugin`, `DataPlugin`, `InventoryPlugin`, `EquipmentPlugin`, `DebugCliPlugin`，初始化应用的核心功能。
 4.  `main.rs` 中的 `Startup` 系统将 `AppState` 切换到 `Loading`。
 5.  `DataPlugin` 中的系统负责在 `Loading` 状态加载数据，加载完成后将 `AppState` 切换到 `InGame`。
 6.  `DebugCliPlugin` 启动一个独立线程，通过标准输入(stdin)与用户进行命令行交互。
@@ -37,7 +39,7 @@
 作为应用的入口点，`main.rs` 的职责是：
 -   初始化 Bevy `App`。
 -   配置 `DefaultPlugins`，特别是 `WindowPlugin`，以隐藏图形界面。
--   注册项目的所有自定义插件：`CorePlugin`, `DebugCliPlugin`, `data::DataPlugin`。
+-   注册项目的所有自定义插件：`CorePlugin`, `data::DataPlugin`, `inventory::InventoryPlugin`, `equipment::EquipmentPlugin`, `interface::DebugCliPlugin`。
 -   注册一个全局的日志转发系统 `forward_log_event`，它会监听 `core::events::LogEvent` 事件并将其内容打印到控制台。
 -   注册一个 `Startup` 系统，在应用启动时将 `AppState` 设置为 `Loading`，从而启动数据加载流程。
 
@@ -98,10 +100,49 @@
     -   插件在 `build` 时，会启动一个新线程专门用于阻塞式地读取标准输入（`stdin`）。
     -   读取到的每一行输入都会被存入一个全局静态的线程安全队列 `CLI_BUFFER`。
     -   `read_stdin` 系统：在 Bevy 的主线程中，每帧检查 `CLI_BUFFER`，取出所有行并作为 `CliLine` 事件发送。
-    -   `execute_cli_commands` 系统：此系统仅在 `AppState::InGame` 状态下运行。它监听 `CliLine` 事件，解析命令并执行相应操作。
-    -   `parse_command` 函数：将用户输入的字符串（如 "items sword"）解析为结构化的 `Command` 枚举（如 `Command::Items(Some("sword"))`）。
-    -   支持的命令包括 `help`, `status`, `exit`, `items` 等，`items` 命令还支持通过 id/uuid/name 进行模糊查询。
+    -   `execute_cli_commands` 系统：此系统仅在 `AppState::InGame` 状态下运行。它监听 `CliLine` 事件，解析命令并执行相应操作。它会查询 `Res<T>` 来获取世界信息，并通过发送事件（如 `GiveItemEvent`, `EquipEvent`, `LogEvent`）来驱动游戏逻辑或输出信息。
+    -   `parse_command` 函数：将用户输入的字符串（如 "give sword_iron 1"）解析为结构化的 `Command` 枚举（如 `Command::Give { id: "sword_iron", count: 1 }`）。
+    -   支持的命令包括 `help`, `status`, `exit`, `items`, `give`, `inventory`, `equip` 等。
     -   `uuid_from_id` 工具函数：根据物品的字符串 `id` 生成一个稳定的版本5 UUID，确保其唯一性和可重复性。
+
+### 3.5. `inventory` 模块
+
+`inventory` 模块负责管理玩家的背包。
+
+-   **`InventoryPlugin` (`src/inventory/mod.rs`)**:
+    -   注册 `Backpack` 资源，作为玩家的背包实例，并设定初始容量。
+    -   注册 `GiveItemEvent` 和 `ListInventoryEvent` 事件。
+    -   注册 `give_item` 和 `print_inventory` 系统，它们在 `InGame` 状态下运行。
+
+-   **`components.rs` (`src/inventory/components.rs`)**:
+    -   `Backpack`: 一个资源，包含一个 `Vec<ItemStack>` (slots) 和容量 (capacity)。
+    -   `ItemStack`: 代表一叠物品，包含物品原型 (`ItemEntry`) 和数量 (`count`)。
+
+-   **`events.rs` (`src/inventory/events.rs`)**:
+    -   `GiveItemEvent`: 请求向背包添加物品的事件。
+    -   `ListInventoryEvent`: 请求打印背包内容的事件。
+
+-   **`systems.rs` (`src/inventory/systems.rs`)**:
+    -   `give_item`: 监听 `GiveItemEvent`，根据物品 ID 查找原型，并将其添加到 `Backpack` 资源中。它会处理物品堆叠和寻找空位。
+    -   `print_inventory`: 监听 `ListInventoryEvent`，遍历 `Backpack` 并将内容打印到标准输出。
+
+### 3.6. `equipment` 模块
+
+`equipment` 模块负责管理玩家的装备。
+
+-   **`EquipmentPlugin` (`src/equipment/mod.rs`)**:
+    -   注册 `Equipment` 资源。
+    -   注册 `EquipEvent` 事件。
+    -   注册 `equip_item` 系统，在 `InGame` 状态下运行。
+
+-   **`components.rs` (`src/equipment/components.rs`)**:
+    -   `Equipment`: 一个资源，目前简化为只有一个 `weapon` 槽位 (`Option<ItemStack>`)。
+
+-   **`events.rs` (`src/equipment/events.rs`)**:
+    -   `EquipEvent`: 请求装备物品的事件，包含槽位名称和背包索引。
+
+-   **`systems.rs` (`src/equipment/systems.rs`)**:
+    -   `equip_item`: 监听 `EquipEvent`，处理从背包中取出物品并装备到相应槽位的逻辑。
 
 ## 4. 逻辑流程
 
@@ -127,11 +168,14 @@
     -   调用 `parse_command` 将字符串解析为 `Command` 枚举。
     -   根据 `Command` 的类型执行相应逻辑：
         -   `Command::Help`: 发送包含帮助文本的 `LogEvent`。
-        -   `Command::Status`: 读取当前状态和物品数量，发送 `LogEvent`。
+        -   `Command::Status`: 读取当前状态、装备、背包，发送 `LogEvent`。
         -   `Command::Items(...)`: 查询 `Assets<ItemList>` 资源，格式化查询结果并发送 `LogEvent`。
+        -   `Command::Give`: 发送 `GiveItemEvent`，由 `inventory` 模块处理。
+        -   `Command::Inventory`: 发送 `ListInventoryEvent`，由 `inventory` 模块处理。
+        -   `Command::Equip`: 发送 `EquipEvent`，由 `equipment` 模块处理。
         -   `Command::Exit`: 发送 `AppExit` 事件以关闭程序。
 4.  **响应输出**: `main.rs` 中的 `forward_log_event` 系统捕获所有 `LogEvent`，并将其内容用 `println!` 打印到控制台，从而向用户显示结果。
 
 ## 5. 总结
 
-当前项目是一个结构清晰、模块化的 Bevy 应用框架。它成功地将核心逻辑 (`core`)、数据处理 (`data`) 和用户界面 (`interface`) 分离开来。通过利用 Bevy 的状态机和事件系统，实现了清晰的业务流程控制。基于这个框架，可以方便地扩展新的游戏功能，例如添加角色、战斗系统、地图生成等。
+当前项目是一个结构清晰、模块化的 Bevy 应用框架。它成功地将核心逻辑 (`core`)、数据处理 (`data`)、业务功能（`inventory`, `equipment`）和用户界面 (`interface`) 分离开来。通过利用 Bevy 的状态机和事件系统，实现了清晰的业务流程控制。基于这个框架，可以方便地扩展新的游戏功能，例如添加角色、战斗系统、地图生成等。
