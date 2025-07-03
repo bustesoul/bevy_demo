@@ -8,7 +8,7 @@ use crate::core::states::AppState;
 // --------------------------- 资源 ---------------------------
 #[derive(Resource, Default)]
 pub struct ItemAssets {
-    handle: Option<Handle<ItemList>>,
+    pub(crate) handle: Option<Handle<ItemList>>,
 }
 
 // --------------------------- 插件 ---------------------------
