@@ -51,12 +51,18 @@ pub fn print_inventory(
     if ev_list.is_empty() { return; }
     ev_list.clear();
 
+    let mut empty = true;
     for (idx, stack) in backpack.slots.iter().enumerate() {
         if stack.count > 0 {
+            empty = false;
             println!(
                 "[{idx}] {} ×{} (id={})",
                 stack.proto.name, stack.count, stack.proto.id
             );
         }
+    }
+
+    if empty {
+        println!("  (empty)");
     }
 }
