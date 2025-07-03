@@ -1,17 +1,18 @@
 //! 文字 CLI：读取 stdin → 解析命令 → 执行并打印
 
-use std::num::NonZero;
-use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
-use once_cell::sync::Lazy;
 use bevy::app::AppExit;
 use bevy::prelude::*;
+use once_cell::sync::Lazy;
+use std::collections::VecDeque;
+use std::num::NonZero;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::core::{events::LogEvent, states::AppState};
-use crate::data::{schema::ItemList, ItemAssets};
+use crate::data::{ItemAssets, schema::ItemList};
 
-static CLI_BUFFER: Lazy<Arc<Mutex<VecDeque<String>>>> = Lazy::new(|| Arc::new(Mutex::new(VecDeque::new())));
+static CLI_BUFFER: Lazy<Arc<Mutex<VecDeque<String>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(VecDeque::new())));
 
 /// 插件入口
 pub struct DebugCliPlugin;
@@ -41,8 +42,7 @@ impl Plugin for DebugCliPlugin {
             // 仅在 InGame 处理命令
             .add_systems(
                 Update,
-                execute_cli_commands
-                    .run_if(in_state(AppState::InGame)),
+                execute_cli_commands.run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -59,6 +59,9 @@ enum Command {
     Status,
     Exit,
     Items(Option<String>), // None=全部；Some(token)=按 id/uuid/name 查询
+    Give { id: String, count: u32 },
+    Inventory,
+    Equip { slot: String, index: usize },
     Unsupported(String),
 }
 
@@ -80,6 +83,9 @@ fn execute_cli_commands(
     state: Res<State<AppState>>,
     item_assets: Res<ItemAssets>,
     lists: Res<Assets<ItemList>>,
+    mut ev_give: EventWriter<crate::inventory::events::GiveItemEvent>,
+    mut ev_list: EventWriter<crate::inventory::events::ListInventoryEvent>,
+    mut ev_equip: EventWriter<crate::equipment::events::EquipEvent>,
 ) {
     for CliLine(input) in line_reader.read() {
         match parse_command(input) {
@@ -90,7 +96,11 @@ fn execute_cli_commands(
   status                 查看当前状态
   exit / quit            退出程序
   items                  列出所有物品
-  items <token>          用 id / uuid / 名称 查询单个物品".into()));
+  items <token>          用 id / uuid / 名称 查询单个物品
+  give <id> <count>      给予物品
+  inventory              查看物品栏
+  equip <slot> <index>   装备物品
+  ".into()));
             }
 
             Command::Status => {
@@ -153,6 +163,18 @@ Heal : {}
                 }
             }
 
+            Command::Give { id, count } => {
+                ev_give.write(crate::inventory::events::GiveItemEvent { id, count });
+            }
+
+            Command::Inventory => {
+                ev_list.write(crate::inventory::events::ListInventoryEvent);
+            }
+
+            Command::Equip { slot, index } => {
+                ev_equip.write(crate::equipment::events::EquipEvent { slot, index });
+            }
+            
             Command::Unsupported(cmd) => {
                 log.write(LogEvent(format!("不支持的命令: {cmd}")));
             }
@@ -166,14 +188,25 @@ fn parse_command(input: &str) -> Command {
     let mut parts = input.split_whitespace();
     let cmd = parts.next().unwrap_or("").to_lowercase();
     match cmd.as_str() {
-        "help" | "h" | "?"        => Command::Help,
-        "status" | "s"            => Command::Status,
-        "exit" | "quit" | "q"     => Command::Exit,
-        "items" | "item" | "i"    => {
+        "help" | "h" | "?" => Command::Help,
+        "status" | "s" => Command::Status,
+        "exit" | "quit" | "q" => Command::Exit,
+        "items" | "item" | "i" => {
             let token = parts.next().map(|s| s.to_string());
             Command::Items(token)
         }
-        other                      => Command::Unsupported(other.into()),
+        "give" => {
+            let id = parts.next().unwrap_or("").to_string();
+            let cnt = parts.next().unwrap_or("1").parse().unwrap_or(1);
+            Command::Give { id, count: cnt }
+        }
+        "inventory" | "inv" => Command::Inventory,
+        "equip" => {
+            let slot = parts.next().unwrap_or("").to_string();
+            let idx = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            Command::Equip { slot, index: idx }
+        }
+        other => Command::Unsupported(other.into()),
     }
 }
 
