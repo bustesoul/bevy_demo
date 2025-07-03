@@ -2,9 +2,11 @@ use bevy::prelude::*;
 
 mod core;
 mod interface;
+mod data;
 
 use core::CorePlugin;
 use interface::debug_cli::DebugCliPlugin;
+use crate::core::states;
 
 fn main() {
     App::new()
@@ -17,7 +19,11 @@ fn main() {
         }))
         .add_plugins(CorePlugin)
         .add_plugins(DebugCliPlugin)
+        .add_plugins(data::DataPlugin)
         .add_systems(Update, forward_log_event) // 简单打印
+        .add_systems(Startup, |mut next: ResMut<NextState<states::AppState>>| {
+            next.set(states::AppState::Loading);
+        })
         .run();
 }
 
