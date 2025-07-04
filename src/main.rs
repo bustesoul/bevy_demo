@@ -27,8 +27,8 @@ fn main() {
         // 核心插件
         .add_plugins(CorePlugin)
         // 功能插件
-        .add_plugins(DataPlugin)
         .add_plugins(CharacterPlugin)
+        .add_plugins(DataPlugin)
         .add_plugins(InventoryPlugin)
         .add_plugins(EquipmentPlugin)
         // 交互插件
