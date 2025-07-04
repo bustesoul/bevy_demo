@@ -1,13 +1,15 @@
 use bevy::prelude::*;
 
+mod character;
 mod core;
 mod data;
 mod equipment;
 mod interface;
 mod inventory;
 
-use crate::core::states;
+use crate::character::CharacterPlugin;
 use crate::core::CorePlugin;
+use crate::core::states;
 use crate::data::DataPlugin;
 use crate::equipment::EquipmentPlugin;
 use crate::interface::debug_cli::DebugCliPlugin;
@@ -26,6 +28,7 @@ fn main() {
         .add_plugins(CorePlugin)
         // 功能插件
         .add_plugins(DataPlugin)
+        .add_plugins(CharacterPlugin)
         .add_plugins(InventoryPlugin)
         .add_plugins(EquipmentPlugin)
         // 交互插件

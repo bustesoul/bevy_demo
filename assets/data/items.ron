@@ -1,6 +1,6 @@
 (
   items: [
-    (id: "sword_iron", name: "粗铁剑",  atk: 10),
-    (id: "potion_heal_small", name: "小型治疗药水", heal: 25),
+    (id: "sword_iron", name: "粗铁剑", atk: 10, item_type: "weapon"),
+    (id: "potion_heal_small", name: "小型治疗药水", heal: 25, item_type: "potion"),
   ],
 )

@@ -44,7 +44,8 @@ impl Plugin for DebugCliPlugin {
             // 仅在 InGame 处理命令
             .add_systems(
                 Update,
-                execute_cli_commands.run_if(in_state(AppState::InGame)),
+                (execute_basic_commands, execute_character_commands)
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -64,6 +65,12 @@ enum Command {
     Give { id: String, count: u32 },
     Inventory,
     Equip { slot: String, index: usize },
+    Unequip { slot: String },
+    Use { index: usize },
+    Stats,
+    GainExp { amount: i32 },
+    TakeDamage { damage: i32 },
+    Heal { amount: i32 },
     Unsupported(String),
 }
 
@@ -78,7 +85,7 @@ fn read_stdin(mut writer: EventWriter<CliLine>) {
 
 /* ---------------------------- 命令执行 ---------------------------- */
 
-fn execute_cli_commands(
+fn execute_basic_commands(
     mut line_reader: EventReader<CliLine>,
     mut app_exit: EventWriter<AppExit>,
     mut log: EventWriter<LogEvent>,
@@ -90,6 +97,8 @@ fn execute_cli_commands(
     mut ev_give: EventWriter<crate::inventory::events::GiveItemEvent>,
     mut ev_list: EventWriter<crate::inventory::events::ListInventoryEvent>,
     mut ev_equip: EventWriter<crate::equipment::events::EquipEvent>,
+    mut ev_unequip: EventWriter<crate::equipment::events::UnequipEvent>,
+    mut ev_use: EventWriter<crate::inventory::events::UseItemEvent>,
 ) {
     for CliLine(input) in line_reader.read() {
         match parse_command(input) {
@@ -103,8 +112,17 @@ fn execute_cli_commands(
   items <token>          用 id / uuid / 名称 查询单个物品
   give <id> <count>      给予物品
   inventory              查看物品栏
-  equip <slot> <index>   装备物品
-  ".into()));
+  equip <slot> <index>   装备物品 (slot: head/body/weapon/accessory)
+  unequip <slot>         卸下装备
+  use <index>            使用物品
+  stats                  查看角色属性
+  gain_exp <amount>      获得经验 (调试用)
+  take_damage <damage>   受到伤害 (调试用)
+  heal <amount>          恢复生命值 (调试用)
+-----------------------------------------------------------------
+  "
+                    .into(),
+                ));
             }
 
             Command::Status => {
@@ -203,10 +221,67 @@ Heal : {}
             Command::Equip { slot, index } => {
                 ev_equip.write(crate::equipment::events::EquipEvent { slot, index });
             }
-            
+
+            Command::Unequip { slot } => {
+                ev_unequip.write(crate::equipment::events::UnequipEvent { slot });
+            }
+
+            Command::Use { index } => {
+                ev_use.write(crate::inventory::events::UseItemEvent { index });
+            }
+
+            // Character 相关命令在 execute_character_commands 中处理
+            Command::Stats
+            | Command::GainExp { .. }
+            | Command::TakeDamage { .. }
+            | Command::Heal { .. } => {
+                // 这些命令由 execute_character_commands 处理
+            }
+
             Command::Unsupported(cmd) => {
                 log.write(LogEvent(format!("不支持的命令: {cmd}")));
             }
+        }
+    }
+}
+
+/// 处理 Character 相关命令
+fn execute_character_commands(
+    mut line_reader: EventReader<CliLine>,
+    mut ev_show_stats: EventWriter<crate::character::events::ShowStats>,
+    mut ev_gain_exp: EventWriter<crate::character::events::GainExp>,
+    mut ev_take_damage: EventWriter<crate::character::events::TakeDamage>,
+    mut ev_heal: EventWriter<crate::character::events::Heal>,
+) {
+    for CliLine(input) in line_reader.read() {
+        match parse_command(input) {
+            Command::Stats => {
+                ev_show_stats.write(crate::character::events::ShowStats { entity: None });
+            }
+
+            Command::GainExp { amount } => {
+                ev_gain_exp.write(crate::character::events::GainExp {
+                    entity: Entity::PLACEHOLDER, // 系统会自动查找玩家
+                    amount,
+                });
+            }
+
+            Command::TakeDamage { damage } => {
+                ev_take_damage.write(crate::character::events::TakeDamage {
+                    entity: Entity::PLACEHOLDER, // 系统会自动查找玩家
+                    damage,
+                });
+            }
+
+            Command::Heal { amount } => {
+                ev_heal.write(crate::character::events::Heal {
+                    entity: Entity::PLACEHOLDER, // 系统会自动查找玩家
+                    amount,
+                });
+            }
+
+            // 其他命令忽略
+            _ => {}
         }
     }
 }
@@ -234,6 +309,27 @@ fn parse_command(input: &str) -> Command {
             let slot = parts.next().unwrap_or("").to_string();
             let idx = parts.next().unwrap_or("0").parse().unwrap_or(0);
             Command::Equip { slot, index: idx }
+        }
+        "unequip" => {
+            let slot = parts.next().unwrap_or("").to_string();
+            Command::Unequip { slot }
+        }
+        "use" => {
+            let idx = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            Command::Use { index: idx }
+        }
+        "stats" => Command::Stats,
+        "gain_exp" => {
+            let amount = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            Command::GainExp { amount }
+        }
+        "take_damage" => {
+            let damage = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            Command::TakeDamage { damage }
+        }
+        "heal" => {
+            let amount = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            Command::Heal { amount }
         }
         other => Command::Unsupported(other.into()),
     }

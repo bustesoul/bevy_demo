@@ -1,4 +1,4 @@
-use bevy::asset::{Asset};
+use bevy::asset::Asset;
 use bevy::reflect::TypePath;
 use serde::Deserialize;
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -8,7 +8,15 @@ pub struct ItemEntry {
     #[serde(default)]
     pub atk: i32,
     #[serde(default)]
+    pub def: i32,
+    #[serde(default)]
+    pub max_hp: i32,
+    #[serde(default)]
+    pub rng: i32,
+    #[serde(default)]
     pub heal: i32,
+    #[serde(default)]
+    pub item_type: String, // "weapon", "armor", "potion", "scroll", "key", etc.
 }
 
 #[derive(Asset, TypePath, Deserialize, Debug)]
