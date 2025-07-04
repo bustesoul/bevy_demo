@@ -23,6 +23,11 @@ The project is organized into several core modules:
 -   `equipment`: Manages the character's equipment slots.
 -   `interface`: Provides the command-line interface for user interaction.
 
+## Detailed Documentation
+
+- [Project Architecture (Chinese)](doc/arch_cn.md)
+- [Project Features (Chinese)](doc/cur_state.md)
+
 ## How to Run
 
 1.  Clone the repository:

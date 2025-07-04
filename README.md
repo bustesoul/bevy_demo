@@ -23,6 +23,11 @@
 -   `equipment`: 管理角色的装备槽。
 -   `interface`: 提供用于用户交互的命令行界面。
 
+## 详细文档
+
+- [项目架构文档 (arch_cn.md)](doc/arch_cn.md)
+- [项目功能简介 (cur_state.md)](doc/cur_state.md)
+
 ## 如何运行
 
 1.  克隆仓库：
