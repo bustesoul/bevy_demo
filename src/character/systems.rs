@@ -7,7 +7,7 @@ use bevy::prelude::*;
 pub fn handle_gain_exp(
     mut ev_gain_exp: EventReader<GainExp>,
     mut ev_level_up: EventWriter<LevelUp>,
-    mut ev_log: EventWriter<LogEvent>,
+    _ev_log: EventWriter<LogEvent>,
     mut player_query: Query<(Entity, &mut Stats), With<Player>>,
 ) {
     for ev in ev_gain_exp.read() {
@@ -26,17 +26,18 @@ pub fn handle_gain_exp(
             let old_level = stats.lv;
             stats.gain_exp(ev.amount);
 
-            ev_log.write(LogEvent(format!("获得 {} 经验", ev.amount)));
+            // 使用游戏日志
+            crate::interface::debug_cli::queue_game_log(format!("获得 {} 经验", ev.amount));
 
             if stats.lv > old_level {
                 ev_level_up.write(LevelUp {
                     entity: ev.entity,
                     new_level: stats.lv,
                 });
-                ev_log.write(LogEvent(format!(
+                crate::interface::debug_cli::queue_game_log(format!(
                     "升级！等级 {} → {}，生命值 +2，攻击力 +1，防御力 +1",
                     old_level, stats.lv
-                )));
+                ));
             }
         }
     }
@@ -46,7 +47,7 @@ pub fn handle_gain_exp(
 pub fn handle_take_damage(
     mut ev_take_damage: EventReader<TakeDamage>,
     mut ev_death: EventWriter<Death>,
-    mut ev_log: EventWriter<LogEvent>,
+    _ev_log: EventWriter<LogEvent>,
     mut player_query: Query<(Entity, &mut Stats), With<Player>>,
 ) {
     for ev in ev_take_damage.read() {
@@ -64,16 +65,16 @@ pub fn handle_take_damage(
         if let Ok((_, mut stats)) = player_query.get_mut(target_entity) {
             let is_dead = stats.take_damage(ev.damage);
 
-            ev_log.write(LogEvent(format!(
+            crate::interface::debug_cli::queue_game_log(format!(
                 "受到 {} 点伤害，当前生命值：{}/{}",
                 ev.damage, stats.hp, stats.max_hp
-            )));
+            ));
 
             if is_dead {
                 ev_death.write(Death {
                     entity: target_entity,
                 });
-                ev_log.write(LogEvent("死亡！".to_string()));
+                crate::interface::debug_cli::queue_game_log("死亡！".to_string());
             }
         }
     }
@@ -82,7 +83,7 @@ pub fn handle_take_damage(
 /// 处理治疗事件
 pub fn handle_heal(
     mut ev_heal: EventReader<Heal>,
-    mut ev_log: EventWriter<LogEvent>,
+    _ev_log: EventWriter<LogEvent>,
     mut player_query: Query<(Entity, &mut Stats), With<Player>>,
 ) {
     for ev in ev_heal.read() {
@@ -103,10 +104,10 @@ pub fn handle_heal(
             let healed = stats.hp - old_hp;
 
             if healed > 0 {
-                ev_log.write(LogEvent(format!(
+                crate::interface::debug_cli::queue_game_log(format!(
                     "恢复 {} 点生命值，当前生命值：{}/{}",
                     healed, stats.hp, stats.max_hp
-                )));
+                ));
             }
         }
     }

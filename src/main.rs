@@ -42,7 +42,9 @@ fn main() {
 }
 
 fn forward_log_event(mut reader: EventReader<core::events::LogEvent>) {
+    use crate::interface::debug_cli::{queue_log_message};
+    
     for e in reader.read() {
-        println!("> {}", e.0);
+        queue_log_message(e.0.clone());
     }
 }

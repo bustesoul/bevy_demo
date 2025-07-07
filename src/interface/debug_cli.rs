@@ -18,6 +18,53 @@ use crate::character::components::{Player, Stats};
 static CLI_BUFFER: Lazy<Arc<Mutex<VecDeque<String>>>> =
     Lazy::new(|| Arc::new(Mutex::new(VecDeque::new())));
 
+static PENDING_OUTPUTS: Lazy<Arc<Mutex<VecDeque<String>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(VecDeque::new())));
+
+static GAME_LOG_HISTORY: Lazy<Arc<Mutex<VecDeque<GameLogEntry>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(VecDeque::new())));
+
+static CURRENT_GAME_ENTRY: Lazy<Arc<Mutex<Option<GameLogEntry>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(None)));
+
+static UI_STATE: Lazy<Arc<Mutex<UIState>>> = 
+    Lazy::new(|| Arc::new(Mutex::new(UIState::default())));
+
+#[derive(Default)]
+struct UIState {
+    last_stats_hash: u64,
+    show_status_bar: bool,
+    needs_refresh: bool,
+    current_input: String,
+    cursor_position: usize,
+}
+
+/// 游戏日志条目
+#[derive(Clone)]
+struct GameLogEntry {
+    input: Option<String>,  // 用户输入的命令
+    outputs: Vec<String>,   // 对应的输出内容
+}
+
+/// 命令类型分类
+#[derive(Debug, Clone, PartialEq)]
+enum CommandType {
+    System,    // 系统命令：help, status, items, inventory等
+    Game,      // 游戏命令：gain_exp, take_damage, heal, equip, use等
+}
+
+/// CLI消息类型
+#[derive(Clone)]
+enum CliMessage {
+    UserInput(String, CommandType),    // 用户输入的命令及其类型
+    SystemResponse(String),            // 系统命令的即时响应
+    GameLog(String),                  // 游戏日志条目
+    Info(String),
+    Success(String),
+    Warning(String),
+    Error(String),
+}
+
 /// 插件入口
 pub struct DebugCliPlugin;
 impl Plugin for DebugCliPlugin {
@@ -43,12 +90,30 @@ impl Plugin for DebugCliPlugin {
             .add_event::<CliLine>()
             // 每帧从 buffer 取出所有命令行写入事件
             .add_systems(Update, read_stdin)
-            // 仅在 InGame 处理命令
+            // log_cli_input: 在读取输入后立即记录命令
+            .add_systems(Update, log_cli_input.run_if(in_state(AppState::InGame)).after(read_stdin))
+            // UI渲染系统
+            .add_systems(Update, render_ui.run_if(in_state(AppState::InGame)).after(log_cli_input))
+            // 命令执行，确保在日志和 UI 之后（即实际执行逻辑与打印解耦）
             .add_systems(
                 Update,
-                (execute_basic_commands, execute_character_commands, display_status_bar)
-                    .run_if(in_state(AppState::InGame)),
-            );
+                (
+                    execute_basic_commands,
+                    execute_character_commands,
+                )
+                    .run_if(in_state(AppState::InGame))
+                    .after(render_ui),
+            )
+            // 游戏开始时初始化UI
+            .add_systems(OnEnter(AppState::InGame), initialize_ui);
+/// 日志记录：在读取到每一行命令时，立即入队 UserInput（保证顺序）
+fn log_cli_input(mut line_reader: EventReader<CliLine>) {
+    for CliLine(input) in line_reader.read() {
+        let command = parse_command(&input);
+        let ty = command.command_type();
+        queue_output(CliMessage::UserInput(input.clone(), ty));
+    }
+}
     }
 }
 
@@ -60,25 +125,43 @@ struct CliLine(String);
 
 /// 我们支持的命令
 enum Command {
+    // 系统命令
     Help,
     Status,
     Exit,
     Items(Option<String>), // None=全部；Some(token)=按 id/uuid/name 查询
-    Give { id: String, count: u32 },
     Inventory,
+    Stats,
+
+    // 游戏命令
+    Give { id: String, count: u32 },
     Equip { slot: String, index: usize },
     Unequip { slot: String },
     Use { index: usize },
-    Stats,
     GainExp { amount: i32 },
     TakeDamage { damage: i32 },
     Heal { amount: i32 },
+
     Unsupported(String),
 }
 
-/* ---------------------------- 读取 stdin ---------------------------- */
+impl Command {
+    /// 获取命令类型
+    fn command_type(&self) -> CommandType {
+        match self {
+            Command::Help | Command::Status | Command::Exit |
+            Command::Items(_) | Command::Inventory | Command::Stats => CommandType::System,
 
-static LAST_STATS_HASH: Lazy<Arc<Mutex<u64>>> = Lazy::new(|| Arc::new(Mutex::new(0)));
+            Command::Give { .. } | Command::Equip { .. } | Command::Unequip { .. } |
+            Command::Use { .. } | Command::GainExp { .. } | Command::TakeDamage { .. } |
+            Command::Heal { .. } => CommandType::Game,
+
+            Command::Unsupported(_) => CommandType::System,
+        }
+    }
+}
+
+/* ---------------------------- 读取 stdin ---------------------------- */
 
 fn read_stdin(mut writer: EventWriter<CliLine>) {
     let mut buffer = CLI_BUFFER.lock().unwrap();
@@ -98,7 +181,7 @@ fn execute_basic_commands(
     lists: Res<Assets<ItemList>>,
     backpack: Res<Backpack>,
     equipment: Res<Equipment>,
-    player_query: Query<&Stats, With<Player>>,
+    _player_query: Query<&Stats, With<Player>>,
     mut ev_give: EventWriter<crate::inventory::events::GiveItemEvent>,
     mut ev_list: EventWriter<crate::inventory::events::ListInventoryEvent>,
     mut ev_equip: EventWriter<crate::equipment::events::EquipEvent>,
@@ -106,10 +189,10 @@ fn execute_basic_commands(
     mut ev_use: EventWriter<crate::inventory::events::UseItemEvent>,
 ) {
     for CliLine(input) in line_reader.read() {
-        // 在处理命令前先打印换行，清除状态栏
-        println!();
-        
-        match parse_command(input) {
+        let command = parse_command(input);
+        // let command_type = command.command_type();
+        // queue_output(CliMessage::UserInput(input.clone(), command_type.clone()));
+        match command {
             Command::Help => {
                 log.write(LogEvent(
                     "命令列表:
@@ -250,17 +333,6 @@ Heal : {}
                 log.write(LogEvent(format!("不支持的命令: {cmd}")));
             }
         }
-        
-        // 命令处理完毕后重新显示状态栏
-        if let Ok(stats) = player_query.single() {
-            let status_bar = format!(
-                "[HP:{}/{} ATK:{} DEF:{} LV:{}({}/{})] > \n",
-                stats.hp, stats.max_hp, stats.atk, stats.def, 
-                stats.lv, stats.exp, stats.exp_to_next()
-            );
-            print!("{}", status_bar);
-            io::stdout().flush().unwrap();
-        }
     }
 }
 
@@ -360,34 +432,203 @@ fn uuid_from_id(id: &str) -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_OID, id.as_bytes())
 }
 
-/// 显示状态栏系统
-fn display_status_bar(
-    player_query: Query<&Stats, With<Player>>,
-) {
-    // 每次都检查是否有玩家存在，如果有则显示状态栏
-    if let Ok(stats) = player_query.single() {
-        let current_hash = calculate_stats_hash(stats);
-        let mut last_hash = LAST_STATS_HASH.lock().unwrap();
-        
-        // 如果属性发生变化或者是首次显示（hash为0）
-        if *last_hash != current_hash {
-            *last_hash = current_hash;
-            
-            // 如果不是首次显示，先清除当前行
-            if *last_hash != 0 {
-                print!("\r\x1b[K");
+/* ---------------------------- UI 系统 ---------------------------- */
+
+/// 队列输出消息
+fn queue_output(message: CliMessage) {
+    let mut outputs = PENDING_OUTPUTS.lock().unwrap();
+    let mut game_history = GAME_LOG_HISTORY.lock().unwrap();
+    let mut current_entry = CURRENT_GAME_ENTRY.lock().unwrap();
+    
+    match message {
+        CliMessage::UserInput(cmd, command_type) => {
+            match command_type {
+                CommandType::System => {
+                    // 系统命令：即时显示，不加入历史
+                    outputs.push_back(format!("┌─ 系统命令 ─{}", "─".repeat(50)));
+                    outputs.push_back(format!("│ > {}", cmd));
+                    outputs.push_back(format!("└{}", "─".repeat(58)));
+                }
+                CommandType::Game => {
+                    // 完成当前游戏日志条目（如果有的话）
+                    if let Some(entry) = current_entry.take() {
+                        game_history.push_back(entry);
+                    }
+                    
+                    // 开始新的游戏日志条目
+                    *current_entry = Some(GameLogEntry {
+                        input: Some(cmd.clone()),
+                        outputs: Vec::new(),
+                    });
+                    
+                    // 即时显示
+                    outputs.push_back(format!("┌─ 游戏命令 ─{}", "─".repeat(50)));
+                    outputs.push_back(format!("│ > {}", cmd));
+                    outputs.push_back(format!("└{}", "─".repeat(58)));
+                }
             }
+        }
+        CliMessage::SystemResponse(msg) => {
+            // 系统响应：即时显示，不加入历史
+            outputs.push_back(format!("📋 {}", msg));
+        }
+        CliMessage::GameLog(msg) => {
+            // 游戏日志：添加到当前游戏条目的输出中
+            let formatted_msg = format!("📝 {}", msg);
+            outputs.push_back(formatted_msg.clone());
             
-            let status_bar = format!(
-                "[HP:{}/{} ATK:{} DEF:{} LV:{}({}/{})] > ",
-                stats.hp, stats.max_hp, stats.atk, stats.def, 
-                stats.lv, stats.exp, stats.exp_to_next()
-            );
-            
-            print!("{}", status_bar);
-            io::stdout().flush().unwrap();
+            if let Some(ref mut entry) = current_entry.as_mut() {
+                entry.outputs.push(formatted_msg);
+            } else {
+                // 如果没有当前条目，创建一个只有输出的条目
+                game_history.push_back(GameLogEntry {
+                    input: None,
+                    outputs: vec![formatted_msg],
+                });
+            }
+        }
+        CliMessage::Info(msg) => {
+            let line = format!("  ℹ️  {}", msg);
+            outputs.push_back(line);
+            // Info消息不自动加入游戏历史，只有明确的GameLog才加入
+        }
+        CliMessage::Success(msg) => {
+            let line = format!("  ✅ {}", msg);
+            outputs.push_back(line);
+            // Success消息不自动加入游戏历史
+        }
+        CliMessage::Warning(msg) => {
+            let line = format!("  ⚠️  {}", msg);
+            outputs.push_back(line);
+            // Warning消息不自动加入游戏历史
+        }
+        CliMessage::Error(msg) => {
+            let line = format!("  ❌ {}", msg);
+            outputs.push_back(line);
+            // Error消息不自动加入游戏历史
         }
     }
+    
+    // 保持游戏历史记录最多10条条目
+    const MAX_GAME_ENTRIES: usize = 10;
+    while game_history.len() > MAX_GAME_ENTRIES {
+        game_history.pop_front();
+    }
+}
+
+/// 公开函数：供main.rs调用，将LogEvent转换为格式化消息
+pub fn queue_log_message(message: String) {
+    queue_output(CliMessage::Info(message));
+}
+
+/// 公开函数：添加游戏日志条目
+pub fn queue_game_log(message: String) {
+    queue_output(CliMessage::GameLog(message));
+}
+
+/// 主UI渲染系统
+fn render_ui(player_query: Query<&Stats, With<Player>>) {
+    let mut ui_state = UI_STATE.lock().unwrap();
+    let mut outputs = PENDING_OUTPUTS.lock().unwrap();
+    let game_history = GAME_LOG_HISTORY.lock().unwrap();
+    let current_entry = CURRENT_GAME_ENTRY.lock().unwrap();
+    
+    // 检查是否有待输出的消息
+    let has_outputs = !outputs.is_empty();
+    
+    // 检查玩家属性是否变化
+    let mut stats_changed = false;
+    if let Ok(stats) = player_query.single() {
+        let current_hash = calculate_stats_hash(stats);
+        if ui_state.last_stats_hash != current_hash {
+            ui_state.last_stats_hash = current_hash;
+            stats_changed = true;
+            ui_state.show_status_bar = true;
+        }
+    }
+    
+    // 如果有任何更新，重新渲染整个界面
+    if has_outputs || stats_changed || ui_state.needs_refresh {
+        // 清屏（全屏刷新）
+        print!("\x1b[2J\x1b[H");
+        // 对于系统命令，只显示即时输出
+        if has_outputs {
+            // 输出所有待处理的消息
+            while let Some(output) = outputs.pop_front() {
+                println!("{}", output);
+            }
+        }
+        
+        // 如果有游戏日志历史或需要刷新，显示完整界面
+        if !game_history.is_empty() || current_entry.is_some() || ui_state.needs_refresh {
+            if has_outputs {
+                println!("{}", "═".repeat(80));
+            }
+            
+            // 显示游戏日志历史（从旧到新的顺序）
+            if !game_history.is_empty() || current_entry.is_some() {
+                println!("📊 游戏日志 (最新记录在下方):");
+                println!("{}", "─".repeat(80));
+
+                // 显示历史记录
+                for entry in game_history.iter() {
+                    display_game_log_entry(entry);
+                }
+
+                // 显示当前正在进行的条目
+                if let Some(ref entry) = current_entry.as_ref() {
+                    display_game_log_entry(entry);
+                }
+
+                println!("{}", "═".repeat(80));
+            }
+            
+            // 显示状态栏
+            if let Ok(stats) = player_query.single() {
+                let status_bar = format_status_bar(stats);
+                println!("{}", status_bar);
+            }
+            
+            // 显示输入提示区域
+            display_input_area();
+        } else if has_outputs {
+            // 仅有系统命令输出时，简单显示输入提示
+            println!("{}", "─".repeat(80));
+            print!("》 ");
+            io::stdout().flush().unwrap();
+        }
+        
+        ui_state.needs_refresh = false;
+    }
+}
+
+/// 显示单个游戏日志条目
+fn display_game_log_entry(entry: &GameLogEntry) {
+    // 先显示用户输入
+    if let Some(ref input) = entry.input {
+        println!("🎮 > {}", input);
+    }
+
+    // 然后显示对应的输出（从上到下）
+    for output in &entry.outputs {
+        println!("  {}", output);
+    }
+}
+
+/// 显示输入区域
+fn display_input_area() {
+    println!("{}", "─".repeat(80));
+    print!("》 ");
+    io::stdout().flush().unwrap();
+}
+
+/// 格式化状态栏
+fn format_status_bar(stats: &Stats) -> String {
+    format!(
+        "📊 [HP:{}/{} ⚔️ATK:{} 🛡️DEF:{} 📈LV:{}({}/{})]",
+        stats.hp, stats.max_hp, stats.atk, stats.def, 
+        stats.lv, stats.exp, stats.exp_to_next()
+    )
 }
 
 /// 计算属性哈希值用于检测变化
@@ -403,4 +644,29 @@ fn calculate_stats_hash(stats: &Stats) -> u64 {
     stats.lv.hash(&mut hasher);
     stats.exp.hash(&mut hasher);
     hasher.finish()
+}
+
+/// 初始化UI界面
+fn initialize_ui() {
+    // 清屏
+    print!("\x1b[2J\x1b[H");
+    
+    // 显示欢迎界面
+    println!("{}", "═".repeat(80));
+    println!("🎮 欢迎来到文字RPG游戏！");
+    println!("{}", "═".repeat(80));
+    println!("📖 游戏说明:");
+    println!("   • 这是一个基于Bevy引擎的文字RPG游戏");
+    println!("   • 你可以通过命令与游戏交互");
+    println!("   • 输入 'help' 查看所有可用命令");
+    println!("   • 你的角色属性会实时显示在状态栏中");
+    println!("{}", "═".repeat(80));
+    println!("{}", "─".repeat(80));
+    print!("》 ");
+    io::stdout().flush().unwrap();
+    
+    // 标记UI需要刷新
+    let mut ui_state = UI_STATE.lock().unwrap();
+    ui_state.needs_refresh = true;
+    ui_state.show_status_bar = true;
 }
