@@ -7,11 +7,13 @@ use std::collections::VecDeque;
 use std::num::NonZero;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+use std::io::{self, Write};
 
 use crate::core::{events::LogEvent, states::AppState};
 use crate::data::{ItemAssets, schema::ItemList};
 use crate::equipment::components::Equipment;
 use crate::inventory::components::Backpack;
+use crate::character::components::{Player, Stats};
 
 static CLI_BUFFER: Lazy<Arc<Mutex<VecDeque<String>>>> =
     Lazy::new(|| Arc::new(Mutex::new(VecDeque::new())));
@@ -44,7 +46,7 @@ impl Plugin for DebugCliPlugin {
             // 仅在 InGame 处理命令
             .add_systems(
                 Update,
-                (execute_basic_commands, execute_character_commands)
+                (execute_basic_commands, execute_character_commands, display_status_bar)
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -76,6 +78,8 @@ enum Command {
 
 /* ---------------------------- 读取 stdin ---------------------------- */
 
+static LAST_STATS_HASH: Lazy<Arc<Mutex<u64>>> = Lazy::new(|| Arc::new(Mutex::new(0)));
+
 fn read_stdin(mut writer: EventWriter<CliLine>) {
     let mut buffer = CLI_BUFFER.lock().unwrap();
     while let Some(line) = buffer.pop_front() {
@@ -94,6 +98,7 @@ fn execute_basic_commands(
     lists: Res<Assets<ItemList>>,
     backpack: Res<Backpack>,
     equipment: Res<Equipment>,
+    player_query: Query<&Stats, With<Player>>,
     mut ev_give: EventWriter<crate::inventory::events::GiveItemEvent>,
     mut ev_list: EventWriter<crate::inventory::events::ListInventoryEvent>,
     mut ev_equip: EventWriter<crate::equipment::events::EquipEvent>,
@@ -101,6 +106,9 @@ fn execute_basic_commands(
     mut ev_use: EventWriter<crate::inventory::events::UseItemEvent>,
 ) {
     for CliLine(input) in line_reader.read() {
+        // 在处理命令前先打印换行，清除状态栏
+        println!();
+        
         match parse_command(input) {
             Command::Help => {
                 log.write(LogEvent(
@@ -242,12 +250,24 @@ Heal : {}
                 log.write(LogEvent(format!("不支持的命令: {cmd}")));
             }
         }
+        
+        // 命令处理完毕后重新显示状态栏
+        if let Ok(stats) = player_query.single() {
+            let status_bar = format!(
+                "[HP:{}/{} ATK:{} DEF:{} LV:{}({}/{})] > \n",
+                stats.hp, stats.max_hp, stats.atk, stats.def, 
+                stats.lv, stats.exp, stats.exp_to_next()
+            );
+            print!("{}", status_bar);
+            io::stdout().flush().unwrap();
+        }
     }
 }
 
 /// 处理 Character 相关命令
 fn execute_character_commands(
     mut line_reader: EventReader<CliLine>,
+    _player_query: Query<&Stats, With<Player>>,
     mut ev_show_stats: EventWriter<crate::character::events::ShowStats>,
     mut ev_gain_exp: EventWriter<crate::character::events::GainExp>,
     mut ev_take_damage: EventWriter<crate::character::events::TakeDamage>,
@@ -338,4 +358,49 @@ fn parse_command(input: &str) -> Command {
 fn uuid_from_id(id: &str) -> Uuid {
     // 用固定 namespace + id 字节生成版本 5 UUID，保证可重复得到同一值
     Uuid::new_v5(&Uuid::NAMESPACE_OID, id.as_bytes())
+}
+
+/// 显示状态栏系统
+fn display_status_bar(
+    player_query: Query<&Stats, With<Player>>,
+) {
+    // 每次都检查是否有玩家存在，如果有则显示状态栏
+    if let Ok(stats) = player_query.single() {
+        let current_hash = calculate_stats_hash(stats);
+        let mut last_hash = LAST_STATS_HASH.lock().unwrap();
+        
+        // 如果属性发生变化或者是首次显示（hash为0）
+        if *last_hash != current_hash {
+            *last_hash = current_hash;
+            
+            // 如果不是首次显示，先清除当前行
+            if *last_hash != 0 {
+                print!("\r\x1b[K");
+            }
+            
+            let status_bar = format!(
+                "[HP:{}/{} ATK:{} DEF:{} LV:{}({}/{})] > ",
+                stats.hp, stats.max_hp, stats.atk, stats.def, 
+                stats.lv, stats.exp, stats.exp_to_next()
+            );
+            
+            print!("{}", status_bar);
+            io::stdout().flush().unwrap();
+        }
+    }
+}
+
+/// 计算属性哈希值用于检测变化
+fn calculate_stats_hash(stats: &Stats) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    
+    let mut hasher = DefaultHasher::new();
+    stats.hp.hash(&mut hasher);
+    stats.max_hp.hash(&mut hasher);
+    stats.atk.hash(&mut hasher);
+    stats.def.hash(&mut hasher);
+    stats.lv.hash(&mut hasher);
+    stats.exp.hash(&mut hasher);
+    hasher.finish()
 }
